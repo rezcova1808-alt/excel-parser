@@ -1,4 +1,4 @@
-package com.example.demo;
+package com.example.excelparesernew;
 
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -9,8 +9,8 @@ import java.util.stream.IntStream;
 public class FileProcess {
     public static void main(String[] args) throws Exception {
         ExcelDPANCollector collector = new ExcelDPANCollector();
-        //Path in = Paths.get("src/main/resources/testdetokenText.xlsx");
-        Path in = Paths.get("src/main/resources/UltimateTest.xlsx");
+        Path in = Paths.get("src/main/resources/testdetokenText_big.xlsx");
+        //Path in = Paths.get("src/main/resources/UltimateTest.xlsx");
         Path out = Paths.get("src/main/resources/testdetokenText_result.xlsx");
         System.out.println("start collect:" + LocalDateTime.now());
         ProcessFileResult result = collector.collectAllDPANCandidatesMemory(in.toFile(), true);
