@@ -1,4 +1,4 @@
-package com.example.excelparesernew;
+package com.example.demo;
 
 import javax.xml.namespace.QName;
 import javax.xml.stream.*;
@@ -352,15 +352,8 @@ public class ExcelDPANReplacer {
             writer.close();
             reader.close();
         } finally {
-            // Закрываем в обратном порядке
-            try {
-                if (writer != null) writer.close();
-            } catch (Exception ignored) {
-            }
-            try {
-                if (reader != null) reader.close();
-            } catch (Exception ignored) {
-            }
+            try { if (writer != null) writer.close(); } catch (Exception ignored) {}
+            try { if (reader != null) reader.close(); } catch (Exception ignored) {}
         }
         Files.move(tmp, sheetFile, StandardCopyOption.REPLACE_EXISTING);
     }
