@@ -1,4 +1,4 @@
-package com.example.demo;
+package com.example.excelparesernew;
 
 import javax.xml.namespace.QName;
 import javax.xml.stream.*;
@@ -25,7 +25,7 @@ public class ExcelDPANReplacer {
     public ExcelDPANReplacer() {
         this.patternMatcher = new DPANPatternMatcher();
         xmlFactory.setProperty(XMLInputFactory.SUPPORT_DTD, false);
-        xmlFactory.setProperty(XMLInputFactory.IS_NAMESPACE_AWARE, false);
+        xmlFactory.setProperty(XMLInputFactory.IS_NAMESPACE_AWARE, true); // <- важно
         xmlFactory.setProperty(XMLInputFactory.IS_VALIDATING, false);
         outFactory.setProperty(XMLOutputFactory.IS_REPAIRING_NAMESPACES, false);
     }
@@ -141,10 +141,10 @@ public class ExcelDPANReplacer {
             ZipEntry workbookEntry = zipFile.getEntry("xl/workbook.xml");
             if (workbookEntry != null) {
                 try (InputStream is = zipFile.getInputStream(workbookEntry)) {
-                    XMLStreamReader reader = xmlFactory.createXMLStreamReader(is, StandardCharsets.UTF_8.name());
+                    XMLStreamReader reader = XMLInputFactory.newInstance().createXMLStreamReader(is);
                     while (reader.hasNext()) {
                         int event = reader.next();
-                        if (event == XMLStreamConstants.START_ELEMENT && "sheet".equals(reader.getLocalName())) {
+                        if (event == XMLStreamReader.START_ELEMENT && "sheet".equals(reader.getLocalName())) {
                             String name = reader.getAttributeValue(null, "name");
                             String ns = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
                             String id = reader.getAttributeValue(ns, "id");
@@ -158,10 +158,10 @@ public class ExcelDPANReplacer {
             ZipEntry relsEntry = zipFile.getEntry("xl/_rels/workbook.xml.rels");
             if (relsEntry != null) {
                 try (InputStream is = zipFile.getInputStream(relsEntry)) {
-                    XMLStreamReader reader = xmlFactory.createXMLStreamReader(is, StandardCharsets.UTF_8.name());
+                    XMLStreamReader reader = XMLInputFactory.newInstance().createXMLStreamReader(is);
                     while (reader.hasNext()) {
                         int event = reader.next();
-                        if (event == XMLStreamConstants.START_ELEMENT && "Relationship".equals(reader.getLocalName())) {
+                        if (event == XMLStreamReader.START_ELEMENT && "Relationship".equals(reader.getLocalName())) {
                             String id = reader.getAttributeValue(null, "Id");
                             String target = reader.getAttributeValue(null, "Target");
                             if (id != null && target != null && target.startsWith("worksheets/")) {
@@ -204,6 +204,7 @@ public class ExcelDPANReplacer {
 
         XMLEventReader reader = null;
         XMLStreamWriter writer = null;
+
         try (InputStream is = new BufferedInputStream(Files.newInputStream(sheetFile), BUFFER_SIZE);
              OutputStream os = new BufferedOutputStream(Files.newOutputStream(tmp), BUFFER_SIZE)) {
 
@@ -348,7 +349,10 @@ public class ExcelDPANReplacer {
             }
 
             writer.flush();
+            writer.close();
+            reader.close();
         } finally {
+            // Закрываем в обратном порядке
             try {
                 if (writer != null) writer.close();
             } catch (Exception ignored) {
@@ -393,13 +397,11 @@ public class ExcelDPANReplacer {
             }
         }
         if (!hasT) writer.writeAttribute("t", "inlineStr");
-
         writer.writeStartElement("is");
-        // Сохраняем пробелы
         writer.writeAttribute("xml", "http://www.w3.org/XML/1998/namespace", "space", "preserve");
         writeXmlFragment(writer, modifiedRaw);
-        writer.writeEndElement(); // </is>
-        writer.writeEndElement(); // </c>
+        writer.writeEndElement();
+        writer.writeEndElement();
     }
 
     private void writeXmlFragment(XMLStreamWriter writer, String fragment) throws Exception {
