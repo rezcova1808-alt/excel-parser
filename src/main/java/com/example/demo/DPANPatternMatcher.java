@@ -71,4 +71,16 @@ public class DPANPatternMatcher {
 
         return null;
     }
+
+    /**
+     * Быстрая проверка: содержит ли текст хотя бы один кандидат в DPAN.
+     * Использует общий паттерн dpanCandidatePattern, НЕ создаёт список.
+     * Останавливается на первом же совпадении.
+     */
+    public boolean containsDPANCandidate(String text) {
+        if (text == null || text.isEmpty()) {
+            return false;
+        }
+        return dpanCandidatePattern.matcher(text).find();
+    }
 }

@@ -25,7 +25,6 @@ public class ExcelDPANReplacer {
     public ExcelDPANReplacer() {
         this.patternMatcher = new DPANPatternMatcher();
         xmlFactory.setProperty(XMLInputFactory.SUPPORT_DTD, false);
-        xmlFactory.setProperty(XMLInputFactory.IS_NAMESPACE_AWARE, false);
         xmlFactory.setProperty(XMLInputFactory.IS_VALIDATING, false);
         outFactory.setProperty(XMLOutputFactory.IS_REPAIRING_NAMESPACES, false);
     }
@@ -50,16 +49,16 @@ public class ExcelDPANReplacer {
         try {
             FileUtils.unzip(inputPath, tempDir, BUFFER_SIZE);
             Path sharedPath = tempDir.resolve("xl/sharedStrings.xml");
-            Map<Integer, SharedStringData> sharedStrings = loadSharedStrings(sharedPath);
+            Map<Integer, SharedStringData> sharedStringsFilteredCandidates = loadSharedStringsFilteredCandidates(sharedPath);
             Map<String, String> sheetFileToVisible = getSheetFileToVisibleName(inputPath);
-            processWorksheets(tempDir, replacementMap, excludedColsPerSheet, sheetFileToVisible, sharedStrings);
+            processWorksheets(tempDir, replacementMap, excludedColsPerSheet, sheetFileToVisible, sharedStringsFilteredCandidates);
             FileUtils.zip(tempDir, outputPath, BUFFER_SIZE);
         } finally {
             FileUtils.deleteDirectory(tempDir);
         }
     }
 
-    private Map<Integer, SharedStringData> loadSharedStrings(Path shared) throws Exception {
+    private Map<Integer, SharedStringData> loadSharedStringsFilteredCandidates(Path shared) throws Exception {
         Map<Integer, SharedStringData> map = new HashMap<>();
         if (shared == null || !Files.exists(shared)) return map;
 
@@ -108,11 +107,16 @@ public class ExcelDPANReplacer {
                 } else if (ev == XMLStreamConstants.END_ELEMENT) {
                     String local = r.getLocalName();
                     if ("si".equals(local)) {
-                        map.put(idx++, new SharedStringData(
-                                rawBuilder.toString(),
-                                plainBuilder.toString(),
-                                new ArrayList<>(textLengths)
-                        ));
+                        String plainText = plainBuilder.toString();
+                        if (patternMatcher.containsDPANCandidate(plainText)) {
+                            // System.out.println("plainText, "+ plainText +", index:"+ idx);
+                            map.put(idx, new SharedStringData(
+                                    rawBuilder.toString(),
+                                    plainText,
+                                    new ArrayList<>(textLengths)
+                            ));
+                        }
+                        idx++; // ВАЖНО: увеличиваем для следующего элемента
                         inSi = false;
                         inT = false;
                     } else if (inSi) {
@@ -193,7 +197,7 @@ public class ExcelDPANReplacer {
     }
 
     private void processSingleSheet(Path sheetFile, Map<String, String> replacementMap,
-                                    Set<Integer> excluded, Map<Integer, SharedStringData> sharedStrings) throws Exception {
+                                    Set<Integer> excluded, Map<Integer, SharedStringData> sharedStringsFiltered) throws Exception {
 
         Path tmp = sheetFile.getParent().resolve(sheetFile.getFileName().toString() + ".tmp");
 
@@ -202,6 +206,9 @@ public class ExcelDPANReplacer {
 
             XMLEventReader reader = xmlFactory.createXMLEventReader(is);
             XMLStreamWriter writer = outFactory.createXMLStreamWriter(os, StandardCharsets.UTF_8.name());
+
+            // <-- НОВОЕ: кэш модифицированных raw-строк по индексу shared string
+            Map<Integer, String> modifiedRawCache = new HashMap<>();
 
             List<XMLEvent> cellEvents = new ArrayList<>();
             boolean insideCell = false;
@@ -258,12 +265,24 @@ public class ExcelDPANReplacer {
                             try {
                                 int idx = Integer.parseInt(vContent.toString().trim());
                                 if (!excluded.contains(getColumnIndex(cellRef))) {
-                                    SharedStringData data = sharedStrings.get(idx);
+                                    SharedStringData data = sharedStringsFiltered.get(idx);
                                     if (data != null) {
-                                        String plainText = data.plain;
-                                        String replacedPlain = patternMatcher.replaceDPANsWithMap(plainText, replacementMap);
-                                        if (!plainText.equals(replacedPlain)) {
-                                            String modifiedRaw = replaceTextInRawXml(data, replacedPlain);
+                                        // <-- НОВОЕ: используем кэш
+                                        String modifiedRaw = modifiedRawCache.get(idx);
+                                        if (modifiedRaw == null) {
+                                            // Первый раз – вычисляем
+                                            String plainText = data.plain;
+                                            String replacedPlain = patternMatcher.replaceDPANsWithMap(plainText, replacementMap);
+                                            if (!plainText.equals(replacedPlain)) {
+                                                modifiedRaw = replaceTextInRawXml(data, replacedPlain);
+                                                modifiedRawCache.put(idx, modifiedRaw);
+                                            } else {
+                                                // Замены нет – сохраняем пустую строку как маркер
+                                                modifiedRawCache.put(idx, "");
+                                            }
+                                        }
+                                        // Если modifiedRaw не пустая – заменяем
+                                        if (modifiedRaw != null && !modifiedRaw.isEmpty()) {
                                             writeInlineCell(writer, modifiedRaw, cellAttrs);
                                             replaced = true;
                                         }
