@@ -1,4 +1,4 @@
-package com.example.excelparesernew;
+package com.example.demo;
 
 import javax.xml.namespace.QName;
 import javax.xml.stream.*;
@@ -25,6 +25,7 @@ public class ExcelDPANReplacer {
     public ExcelDPANReplacer() {
         this.patternMatcher = new DPANPatternMatcher();
         xmlFactory.setProperty(XMLInputFactory.SUPPORT_DTD, false);
+        xmlFactory.setProperty(XMLInputFactory.IS_NAMESPACE_AWARE, false);
         xmlFactory.setProperty(XMLInputFactory.IS_VALIDATING, false);
         outFactory.setProperty(XMLOutputFactory.IS_REPAIRING_NAMESPACES, false);
     }
@@ -140,10 +141,10 @@ public class ExcelDPANReplacer {
             ZipEntry workbookEntry = zipFile.getEntry("xl/workbook.xml");
             if (workbookEntry != null) {
                 try (InputStream is = zipFile.getInputStream(workbookEntry)) {
-                    XMLStreamReader reader = XMLInputFactory.newInstance().createXMLStreamReader(is);
+                    XMLStreamReader reader = xmlFactory.createXMLStreamReader(is, StandardCharsets.UTF_8.name());
                     while (reader.hasNext()) {
                         int event = reader.next();
-                        if (event == XMLStreamReader.START_ELEMENT && "sheet".equals(reader.getLocalName())) {
+                        if (event == XMLStreamConstants.START_ELEMENT && "sheet".equals(reader.getLocalName())) {
                             String name = reader.getAttributeValue(null, "name");
                             String ns = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
                             String id = reader.getAttributeValue(ns, "id");
@@ -157,10 +158,10 @@ public class ExcelDPANReplacer {
             ZipEntry relsEntry = zipFile.getEntry("xl/_rels/workbook.xml.rels");
             if (relsEntry != null) {
                 try (InputStream is = zipFile.getInputStream(relsEntry)) {
-                    XMLStreamReader reader = XMLInputFactory.newInstance().createXMLStreamReader(is);
+                    XMLStreamReader reader = xmlFactory.createXMLStreamReader(is, StandardCharsets.UTF_8.name());
                     while (reader.hasNext()) {
                         int event = reader.next();
-                        if (event == XMLStreamReader.START_ELEMENT && "Relationship".equals(reader.getLocalName())) {
+                        if (event == XMLStreamConstants.START_ELEMENT && "Relationship".equals(reader.getLocalName())) {
                             String id = reader.getAttributeValue(null, "Id");
                             String target = reader.getAttributeValue(null, "Target");
                             if (id != null && target != null && target.startsWith("worksheets/")) {
@@ -201,11 +202,13 @@ public class ExcelDPANReplacer {
 
         Path tmp = sheetFile.getParent().resolve(sheetFile.getFileName().toString() + ".tmp");
 
+        XMLEventReader reader = null;
+        XMLStreamWriter writer = null;
         try (InputStream is = new BufferedInputStream(Files.newInputStream(sheetFile), BUFFER_SIZE);
              OutputStream os = new BufferedOutputStream(Files.newOutputStream(tmp), BUFFER_SIZE)) {
 
-            XMLEventReader reader = xmlFactory.createXMLEventReader(is);
-            XMLStreamWriter writer = outFactory.createXMLStreamWriter(os, StandardCharsets.UTF_8.name());
+            reader = xmlFactory.createXMLEventReader(is, StandardCharsets.UTF_8.name());
+            writer = outFactory.createXMLStreamWriter(os, StandardCharsets.UTF_8.name());
 
             // <-- НОВОЕ: кэш модифицированных raw-строк по индексу shared string
             Map<Integer, String> modifiedRawCache = new HashMap<>();
@@ -345,8 +348,15 @@ public class ExcelDPANReplacer {
             }
 
             writer.flush();
-            writer.close();
-            reader.close();
+        } finally {
+            try {
+                if (writer != null) writer.close();
+            } catch (Exception ignored) {
+            }
+            try {
+                if (reader != null) reader.close();
+            } catch (Exception ignored) {
+            }
         }
         Files.move(tmp, sheetFile, StandardCopyOption.REPLACE_EXISTING);
     }
