@@ -18,8 +18,6 @@ public class ExcelDPANReplacer {
     private final XMLInputFactory xmlFactory = XMLInputFactory.newInstance();
     private final XMLOutputFactory outFactory = XMLOutputFactory.newInstance();
 
-    public static final int BUFFER_SIZE = 256 * 1024;
-
     private final DPANPatternMatcher patternMatcher;
 
     public ExcelDPANReplacer() {
@@ -42,21 +40,13 @@ public class ExcelDPANReplacer {
         }
     }
 
-    public void replaceAllDpans(Path inputPath, Path outputPath,
+    public void replaceAllDpans(Path inputPath,
                                 Map<String, String> replacementMap,
-                                Map<String, Set<Integer>> excludedColsPerSheet) throws Exception {
-
-        Path tempDir = Files.createTempDirectory("xlsx_inline_");
-        try {
-            FileUtils.unzip(inputPath, tempDir, BUFFER_SIZE);
-            Path sharedPath = tempDir.resolve("xl/sharedStrings.xml");
-            Map<Integer, SharedStringData> sharedStringsFilteredCandidates = loadSharedStringsFilteredCandidates(sharedPath);
-            Map<String, String> sheetFileToVisible = getSheetFileToVisibleName(inputPath);
-            processWorksheets(tempDir, replacementMap, excludedColsPerSheet, sheetFileToVisible, sharedStringsFilteredCandidates);
-            FileUtils.zip(tempDir, outputPath, BUFFER_SIZE);
-        } finally {
-            FileUtils.deleteDirectory(tempDir);
-        }
+                                Map<String, Set<Integer>> excludedColsPerSheet, Path tempDir, int bufferSize) throws Exception {
+        Path sharedPath = tempDir.resolve("xl/sharedStrings.xml");
+        Map<Integer, SharedStringData> sharedStringsFilteredCandidates = loadSharedStringsFilteredCandidates(sharedPath);
+        Map<String, String> sheetFileToVisible = getSheetFileToVisibleName(inputPath);
+        processWorksheets(tempDir, replacementMap, excludedColsPerSheet, sheetFileToVisible, sharedStringsFilteredCandidates, bufferSize);
     }
 
     private Map<Integer, SharedStringData> loadSharedStringsFilteredCandidates(Path shared) throws Exception {
@@ -181,7 +171,7 @@ public class ExcelDPANReplacer {
     private void processWorksheets(Path tempDir, Map<String, String> replacementMap,
                                    Map<String, Set<Integer>> excludedColsPerSheet,
                                    Map<String, String> sheetFileToVisible,
-                                   Map<Integer, SharedStringData> sharedStrings) throws Exception {
+                                   Map<Integer, SharedStringData> sharedStrings, int bufferSize) throws Exception {
 
         Path sheetsDir = tempDir.resolve("xl/worksheets");
         if (!Files.exists(sheetsDir)) return;
@@ -192,21 +182,21 @@ public class ExcelDPANReplacer {
                 String visibleName = sheetFileToVisible.getOrDefault(sheetFileName, sheetFileName);
                 Set<Integer> excluded = excludedColsPerSheet.getOrDefault(visibleName, Collections.emptySet());
                 System.out.println("excluded:" + excluded);
-                processSingleSheet(sheetFile, replacementMap, excluded, sharedStrings);
+                processSingleSheet(sheetFile, replacementMap, excluded, sharedStrings, bufferSize);
             }
         }
     }
 
     private void processSingleSheet(Path sheetFile, Map<String, String> replacementMap,
-                                    Set<Integer> excluded, Map<Integer, SharedStringData> sharedStringsFiltered) throws Exception {
+                                    Set<Integer> excluded, Map<Integer, SharedStringData> sharedStringsFiltered, int bufferSize) throws Exception {
 
         Path tmp = sheetFile.getParent().resolve(sheetFile.getFileName().toString() + ".tmp");
 
         XMLEventReader reader = null;
         XMLStreamWriter writer = null;
 
-        try (InputStream is = new BufferedInputStream(Files.newInputStream(sheetFile), BUFFER_SIZE);
-             OutputStream os = new BufferedOutputStream(Files.newOutputStream(tmp), BUFFER_SIZE)) {
+        try (InputStream is = new BufferedInputStream(Files.newInputStream(sheetFile), bufferSize);
+             OutputStream os = new BufferedOutputStream(Files.newOutputStream(tmp), bufferSize)) {
 
             reader = xmlFactory.createXMLEventReader(is, StandardCharsets.UTF_8.name());
             writer = outFactory.createXMLStreamWriter(os, StandardCharsets.UTF_8.name());
@@ -349,11 +339,15 @@ public class ExcelDPANReplacer {
             }
 
             writer.flush();
-            writer.close();
-            reader.close();
         } finally {
-            try { if (writer != null) writer.close(); } catch (Exception ignored) {}
-            try { if (reader != null) reader.close(); } catch (Exception ignored) {}
+            try {
+                if (writer != null) writer.close();
+            } catch (Exception ignored) {
+            }
+            try {
+                if (reader != null) reader.close();
+            } catch (Exception ignored) {
+            }
         }
         Files.move(tmp, sheetFile, StandardCopyOption.REPLACE_EXISTING);
     }

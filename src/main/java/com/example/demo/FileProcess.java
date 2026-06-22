@@ -1,5 +1,6 @@
-package com.example.excelparesernew;
+package com.example.demo;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.LocalDateTime;
@@ -7,21 +8,44 @@ import java.util.*;
 import java.util.stream.IntStream;
 
 public class FileProcess {
+    public static final int BUFFER_SIZE = 256 * 1024;
+
     public static void main(String[] args) throws Exception {
         ExcelDPANCollector collector = new ExcelDPANCollector();
-        Path in = Paths.get("src/main/resources/testdetokenText_big.xlsx");
-        //Path in = Paths.get("src/main/resources/UltimateTest.xlsx");
+        Path in = Paths.get("src/main/resources/UltimateTest.xlsx");
         Path out = Paths.get("src/main/resources/testdetokenText_result.xlsx");
+
         System.out.println("start collect:" + LocalDateTime.now());
         ProcessFileResult result = collector.collectAllDPANCandidatesMemory(in.toFile(), true);
         Set<String> candidates = result.getCollectValuesFromFile();
         System.out.println(candidates);
         Map<String, String> replacementMap = collectReplacementMap(candidates);
         Map<String, Set<Integer>> excludedColsPerSheet = result.getExcludedColsPerSheet();
-        ExcelDPANReplacer excelDPANReplacer = new ExcelDPANReplacer();
-        System.out.println("start replace:" + LocalDateTime.now());
-        excelDPANReplacer.replaceAllDpans(in, out, replacementMap, excludedColsPerSheet);
-        System.out.println("end replace:" + LocalDateTime.now());
+
+        // Создаём временную папку
+        Path tempDir = Files.createTempDirectory("xlsx_inline_");
+        try {
+            // 1. Распаковать архив
+            FileUtils.unzip(in, tempDir, BUFFER_SIZE);
+            ExcelDPANReplacer excelDPANReplacer = new ExcelDPANReplacer();
+            System.out.println("start replace:" + LocalDateTime.now());
+            //Обрабатываем
+            excelDPANReplacer.replaceAllDpans(in, replacementMap, excludedColsPerSheet, tempDir, BUFFER_SIZE);//это будет в либе
+            System.out.println("end replace:" + LocalDateTime.now());
+            // 3. Упаковать результат
+            FileUtils.zip(tempDir, out, BUFFER_SIZE);
+        } catch (Exception e) {
+            System.err.println("Processing failed: " + e.getMessage());
+            // можно пробросить исключение дальше, если нужно
+        } finally {
+            // Удаляем временную папку после завершения
+            FileUtils.deleteDirectory(tempDir);
+        }
+
+        // Заменяем исходный файл обработанным
+        //Files.deleteIfExists(in);
+        //Files.move(out, in);
+        System.out.println("Original file replaced with processed version.");
     }
 
     static Map<String, String> collectReplacementMap(Set<String> candidates) {
