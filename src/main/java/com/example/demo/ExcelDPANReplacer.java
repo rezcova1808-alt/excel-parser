@@ -54,7 +54,7 @@ public class ExcelDPANReplacer {
         if (shared == null || !Files.exists(shared)) return map;
 
         try (InputStream is = Files.newInputStream(shared)) {
-            XMLStreamReader r = xmlFactory.createXMLStreamReader(is, StandardCharsets.UTF_8.name());
+            XMLStreamReader reader = xmlFactory.createXMLStreamReader(is, StandardCharsets.UTF_8.name());
             StringBuilder rawBuilder = new StringBuilder();
             StringBuilder plainBuilder = new StringBuilder();
             List<Integer> textLengths = new ArrayList<>();
@@ -62,10 +62,10 @@ public class ExcelDPANReplacer {
             int idx = 0;
             int currentTextLength = 0;
 
-            while (r.hasNext()) {
-                int ev = r.next();
+            while (reader.hasNext()) {
+                int ev = reader.next();
                 if (ev == XMLStreamConstants.START_ELEMENT) {
-                    String local = r.getLocalName();
+                    String local = reader.getLocalName();
                     if ("si".equals(local)) {
                         inSi = true;
                         rawBuilder.setLength(0);
@@ -73,11 +73,11 @@ public class ExcelDPANReplacer {
                         textLengths.clear();
                     } else if (inSi) {
                         rawBuilder.append('<').append(local);
-                        for (int i = 0; i < r.getAttributeCount(); i++) {
+                        for (int i = 0; i < reader.getAttributeCount(); i++) {
                             rawBuilder.append(' ')
-                                    .append(r.getAttributeLocalName(i))
+                                    .append(reader.getAttributeLocalName(i))
                                     .append("=\"")
-                                    .append(escapeAttr(r.getAttributeValue(i)))
+                                    .append(escapeAttr(reader.getAttributeValue(i)))
                                     .append('"');
                         }
                         rawBuilder.append('>');
@@ -88,7 +88,7 @@ public class ExcelDPANReplacer {
                     }
                 } else if (ev == XMLStreamConstants.CHARACTERS || ev == XMLStreamConstants.CDATA) {
                     if (inSi) {
-                        String txt = r.getText();
+                        String txt = reader.getText();
                         rawBuilder.append(escapeXml(txt));
                         if (inT) {
                             plainBuilder.append(txt);
@@ -96,7 +96,7 @@ public class ExcelDPANReplacer {
                         }
                     }
                 } else if (ev == XMLStreamConstants.END_ELEMENT) {
-                    String local = r.getLocalName();
+                    String local = reader.getLocalName();
                     if ("si".equals(local)) {
                         String plainText = plainBuilder.toString();
                         if (patternMatcher.containsDPANCandidate(plainText)) {
@@ -119,11 +119,12 @@ public class ExcelDPANReplacer {
                     }
                 }
             }
-            r.close();
+            reader.close();
         }
         return map;
     }
 
+    // ==================== ПОЛУЧЕНИЕ ИМЁН ЛИСТОВ ====================
     public Map<String, String> getSheetFileToVisibleName(Path srcPath) throws Exception {
         Map<String, String> result = new HashMap<>();
         try (ZipFile zipFile = new ZipFile(srcPath.toFile())) {
@@ -168,6 +169,7 @@ public class ExcelDPANReplacer {
         return result;
     }
 
+    // ==================== ОБРАБОТКА ВСЕХ ЛИСТОВ ====================
     private void processWorksheets(Path tempDir, Map<String, String> replacementMap,
                                    Map<String, Set<Integer>> excludedColsPerSheet,
                                    Map<String, String> sheetFileToVisible,
@@ -187,6 +189,7 @@ public class ExcelDPANReplacer {
         }
     }
 
+    // ==================== ОСНОВНОЙ МЕТОД - ПОТОКОВАЯ ОБРАБОТКА ЛИСТА (БЫСТРО И БЕЗ ЖОРА ПАМЯТИ) ====================
     private void processSingleSheet(Path sheetFile, Map<String, String> replacementMap,
                                     Set<Integer> excluded, Map<Integer, SharedStringData> sharedStringsFiltered, int bufferSize) throws Exception {
 
@@ -268,6 +271,9 @@ public class ExcelDPANReplacer {
                                             String plainText = data.plain;
                                             String replacedPlain = patternMatcher.replaceDPANsWithMap(plainText, replacementMap);
                                             if (!plainText.equals(replacedPlain)) {
+                                                //модификация текста для shared строки insideShared==true
+                                                //Исходный фрагмент внутри <si>: <r><rPr><b/></rPr><t>DPAN_12345</t></r> <t>(проверка)</t>
+                                                //После замены: <r><rPr><b/></rPr><t>NEW_67890</t></r> <t>(проверка)</t>
                                                 modifiedRaw = replaceTextInRawXml(data, replacedPlain);
                                                 modifiedRawCache.put(idx, modifiedRaw);
                                             } else {
@@ -275,7 +281,7 @@ public class ExcelDPANReplacer {
                                                 modifiedRawCache.put(idx, "");
                                             }
                                         }
-                                        // Если modifiedRaw не пустая – заменяем
+                                        // Если modifiedRaw не пустая – заменяем (Меняем t="s" на t="inlineStr", остальные атрибуты сохраняем)
                                         if (modifiedRaw != null && !modifiedRaw.isEmpty()) {
                                             writeInlineCell(writer, modifiedRaw, cellAttrs);
                                             replaced = true;
@@ -383,12 +389,14 @@ public class ExcelDPANReplacer {
                 writer.writeAttribute(name, value);
             }
         }
+        // 1. Меняем t="s" на t="inlineStr"
         if (!hasT) writer.writeAttribute("t", "inlineStr");
         writer.writeStartElement("is");
+        // Сохраняем пробелы
         writer.writeAttribute("xml", "http://www.w3.org/XML/1998/namespace", "space", "preserve");
         writeXmlFragment(writer, modifiedRaw);
-        writer.writeEndElement();
-        writer.writeEndElement();
+        writer.writeEndElement(); // </is>
+        writer.writeEndElement(); // </c>
     }
 
     private void writeXmlFragment(XMLStreamWriter writer, String fragment) throws Exception {
@@ -456,40 +464,52 @@ public class ExcelDPANReplacer {
 
     private String replaceTextInRawXml(SharedStringData data, String newText) {
         List<Integer> textLengths = data.textLengths;
+        // Если нет ни одного <t>, то нечего менять – возвращаем оригинал
         if (textLengths.isEmpty()) return data.raw;
 
+        // 1. Разбиваем новый текст на части по длинам исходных <t>
         String[] parts = new String[textLengths.size()];
         int pos = 0;
         int newLen = newText.length();
         for (int i = 0; i < parts.length; i++) {
-            int len = textLengths.get(i);
+            int len = textLengths.get(i);// сколько символов было в i-м <t> в оригинале
             if (pos < newLen) {
+                // Берём от newText не более len символов, но не выходя за границу
                 int take = Math.min(len, newLen - pos);
                 parts[i] = newText.substring(pos, pos + take);
-                pos += take;
+                pos = pos + take;
             } else {
+                // Если новый текст уже закончился, остальные части остаются пустыми
                 parts[i] = "";
             }
         }
+        // Если новый текст оказался длиннее суммы всех оригинальных длин,
+        // то оставшуюся часть добавляем к последнему куску
         if (pos < newLen) {
-            parts[parts.length - 1] += newText.substring(pos);
+            parts[parts.length - 1] = parts[parts.length - 1] + newText.substring(pos);
         }
 
+        // 2. Заменяем текст внутри каждого <t> в исходном raw
         StringBuilder sb = new StringBuilder(data.raw);
         int i = 0;
         int partIdx = 0;
         while (i < sb.length() && partIdx < parts.length) {
+            // Ищем открывающий тег <t (возможно, с атрибутами)
             int openStart = sb.indexOf("<t", i);
-            if (openStart == -1) break;
-            int openEnd = sb.indexOf(">", openStart);
+            if (openStart == -1) break; // нет больше <t
+            int openEnd = sb.indexOf(">", openStart);// позиция закрывающей >
             if (openEnd == -1) break;
-            int closeStart = sb.indexOf("</t>", openEnd);
+            int closeStart = sb.indexOf("</t>", openEnd); // позиция начала закрывающего </t>
             if (closeStart == -1) break;
+            // Позиция, где начинается текст (сразу после >)
             int textStart = openEnd + 1;
+            // Заменяем текст между > и </t> на экранированную версию части нового текста
             sb.replace(textStart, closeStart, escapeXml(parts[partIdx]));
-            i = closeStart + 4;
+            // Перемещаем указатель за закрывающий </t> и переходим к следующей части
+            i = closeStart + 4;// длина "</t>" = 4
             partIdx++;
         }
+        // Возвращаем изменённый XML-фрагмент
         return sb.toString();
     }
 
